@@ -1,0 +1,100 @@
+Only in zabbix-1.8.10-buckelij/src/zabbix_agent: Makefile
+--- zabbix-1.8.10/src/zabbix_agent/active.c
++++ zabbix-1.8.10-buckelij/src/zabbix_agent/active.c
+@@ -687,6 +687,7 @@
+        int             mtime;
+        char            params[MAX_STRING_LEN];
+        char            filename[MAX_STRING_LEN];
++       char            lastfilename[MAX_STRING_LEN];
+        char            pattern[MAX_STRING_LEN];
+        /* checks `log', `eventlog', `logrt' may contain parameter, which overrides CONFIG_MAX_LINES_PER_SECOND */
+        char            maxlines_persec_str[16];
+@@ -833,9 +834,10 @@
+                                s_count = 0;
+                                p_count = 0;
+                                lastlogsize = active_metrics[i].lastlogsize;
++                               lastfilename[0] = '\0';
+                                mtime = active_metrics[i].mtime;
+
+-                               while (SUCCEED == (ret = process_logrt(filename, &lastlogsize, &mtime, &value, encoding)))
++                               while (SUCCEED == (ret = process_logrt(filename, lastfilename, &lastlogsize, &mtime, &value, encoding)))
+                                {
+                                        if (NULL == value) /* End of file. The file could become empty, must save `lastlogsize' and `mtime'. */
+                                        {
+Only in zabbix-1.8.10-buckelij/src/zabbix_agent: cpustat.o
+Only in zabbix-1.8.10-buckelij/src/zabbix_agent: diskdevices.o
+--- zabbix-1.8.10/src/zabbix_agent/logfiles.c
++++ zabbix-1.8.10-buckelij/src/zabbix_agent/logfiles.c
+@@ -363,7 +363,7 @@
+  *    Return SUCCEED and NULL value if end of file received.                  *
+  *                                                                            *
+  ******************************************************************************/
+-int    process_logrt(char *filename, long *lastlogsize, int *mtime, char **value, const char *encoding)
++int    process_logrt(char *filename, char *lastfilename, long *lastlogsize, int *mtime, char **value, const char *encoding)
+ {
+        int                     i = 0, nbytes, ret = FAIL, logfiles_num = 0, logfiles_alloc = 0, fd = 0, length = 0, j = 0;
+        char                    buffer[MAX_BUFFER_LEN], *directory = NULL, *format = NULL, *logfile_candidate = NULL;
+@@ -378,8 +378,8 @@
+        struct dirent           *d_ent = NULL;
+ #endif
+
+-       zabbix_log(LOG_LEVEL_DEBUG, "In process_logrt() filename [%s] lastlogsize [%li] mtime [%d]",
+-                       filename, *lastlogsize, *mtime);
++       zabbix_log(LOG_LEVEL_DEBUG, "In process_logrt() filename [%s] lastlogsize [%li] mtime [%d] lastfilename [%s]",
++                       filename, *lastlogsize, *mtime, lastfilename);
+
+        /* splitting filename */
+        if (SUCCEED != split_filename(filename, &directory, &format))
+@@ -435,22 +435,26 @@
+
+        zabbix_log(LOG_LEVEL_DEBUG, "we are in the *nix directory reading cycle");
+        while (NULL != (d_ent = readdir(dir)))
+-       {
+-               logfile_candidate = zbx_dsprintf(logfile_candidate, "%s%s", directory, d_ent->d_name);
+-
++       {
++               char *dirname = d_ent->d_name;
++               /*Reuse existing name*/
++               if (lastfilename[0] != '\0') dirname = lastfilename;
++               logfile_candidate = zbx_dsprintf(logfile_candidate, "%s%s", directory, dirname);
+                if (-1 == zbx_stat(logfile_candidate, &file_buf) || !S_ISREG(file_buf.st_mode))
+                {
+                        zabbix_log(LOG_LEVEL_DEBUG, "cannot process read entry [%s]", logfile_candidate);
+                }
+-               else if (NULL != zbx_regexp_match(d_ent->d_name, format, &length))
++               else if (NULL != zbx_regexp_match(dirname, format, &length))
+                {
+                        zabbix_log(LOG_LEVEL_DEBUG, "adding the file [%s] to logfiles", logfile_candidate);
+-                       add_logfile(&logfiles, &logfiles_alloc, &logfiles_num, d_ent->d_name, (int)file_buf.st_mtime);
++                       add_logfile(&logfiles, &logfiles_alloc, &logfiles_num, dirname, (int)file_buf.st_mtime);
+                }
+                else
+                        zabbix_log(LOG_LEVEL_DEBUG, "[%s] does not match [%s]", logfile_candidate, format);
+
+                zbx_free(logfile_candidate);
++
++               if (lastfilename[0] != '\0') break; /*if we reused existing filename, break*/
+        }
+ #endif /*_WINDOWS*/
+
+@@ -507,6 +511,9 @@
+                                        *lastlogsize += nbytes;
+                                        *value = convert_to_utf8(buffer, nbytes, encoding);
+                                        zbx_rtrim(*value, "\r\n ");
++        zabbix_log(LOG_LEVEL_DEBUG, "setting lastfilename to [%s]", logfiles[i].filename);
++        zabbix_log(LOG_LEVEL_DEBUG, "sizeof lastfilename [%d] sizeof filename [%d]", sizeof(lastfilename), sizeof(logfiles[i].filename));
++                                       zbx_strlcpy (lastfilename, logfiles[i].filename, MAX_STRING_LEN);
+                                        ret = SUCCEED;
+                                        break;  /* return at this point */
+                                }
+--- zabbix-1.8.10/src/zabbix_agent/logfiles.h
++++ zabbix-1.8.10-buckelij/src/zabbix_agent/logfiles.h
+@@ -21,6 +21,6 @@
+ #define ZABBIX_LOGFILES_H
+
+ int    process_log(char *filename, long *lastlogsize, char **value, const char *encoding);
+-int    process_logrt(char *fileformat, long *lastlogsize, int *mtime, char **value, const char *encoding);
++int    process_logrt(char *fileformat, char *lastfilename, long *lastlogsize, int *mtime, char **value, const char *encoding);
+
+ #endif
+
